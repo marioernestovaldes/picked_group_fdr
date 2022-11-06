@@ -1,0 +1,19 @@
+0- Create results folder
+
+mkdir percolator; cd percolator
+
+1- The posterior error probabilities (PEP) of MaxQuant are not well-calibrated. Therefore, we first recalculate these with Mokapot (=Percolator for Python):
+
+python3 -u -m picked_group_fdr.pipeline.andromeda2pin ../meta.txt --outputTab andromeda.tab --databases /media/mario/92bb1dc0-1f5c-4566-bfea-709a64de54f8/mario/Workspace/Proteomics_data/LSARP_data/Pan_proteomes/Enterococcus_faecalis/220215-mevt__E_faecalis_protein_database.fasta -e trypsinp
+
+2- Adjust FDR to 0.01 (1%)
+
+python3 -u -m picked_group_fdr.pipeline.run_mokapot 0.01 0.01 /media/mario/92bb1dc0-1f5c-4566-bfea-709a64de54f8/mario/Workspace/Proteomics_data/LSARP_data/notebooks/test_picked_fdr/percolator/ 10
+
+3- Update evidence file with the new scores
+
+python3 -u -m picked_group_fdr.pipeline.update_evidence_from_pout --mq_evidence /media/mario/92bb1dc0-1f5c-4566-bfea-709a64de54f8/mario/Workspace/Proteomics_data/LSARP_data/notebooks/test_picked_fdr/SA001-R1_210426_A_T2/evidence.txt /media/mario/92bb1dc0-1f5c-4566-bfea-709a64de54f8/mario/Workspace/Proteomics_data/LSARP_data/notebooks/test_picked_fdr/SA003-R1_210902_G/evidence.txt --perc_results percolator/andromeda.mokapot.psms.txt percolator/andromeda.mokapot.decoy.psms.txt --mq_evidence_out percolator/evidence.txt
+
+4- Obtain protein group level FDRs
+
+python -m picked_group_fdr --mq_evidence evidence.txt --methods picked_protein_group_mq_input --fasta /media/mario/92bb1dc0-1f5c-4566-bfea-709a64de54f8/mario/Workspace/Proteomics_data/LSARP_data/Pan_proteomes/Enterococcus_faecalis/220215-mevt__E_faecalis_protein_database.fasta -e trypsinp --protein_groups_out ProteinGroups.txt --do_quant
