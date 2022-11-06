@@ -20,9 +20,15 @@ python gui.py
 2. make sure that you have run the MaxQuant search with 100% protein-level FDR.
 3. the posterior error probabilities (PEP) of MaxQuant are not well-calibrated. Therefore, we first recalculate these with [Mokapot](https://mokapot.readthedocs.io/en/latest/) (=[Percolator](http://percolator.ms/) for Python):
    ```shell
+   # can use tab-separated </path/to/mq_evidence_txt> or meta file with one </path/to/mq_evidence_txt> per row
    python3 -u -m picked_group_fdr.pipeline.andromeda2pin </path/to/mq_evidence_txt> --outputTab andromeda.tab --databases </path/to/fasta_file>
+   
+   # percolator is the result folder
    python3 -u -m picked_group_fdr.pipeline.run_mokapot 0.01 0.01 percolator <num_threads>
-   python3 -u -m picked_group_fdr.pipeline.update_evidence_from_pout --mq_evidence </path/to/mq_evidence_txt> --perc_results percolator/andromeda.mokapot.psms.txt percolator/andromeda.mokapot.decoys.psms.txt --mq_evidence_out percolator/evidence.txt
+   
+   # use tab-separated </path/to/mq_evidence_txt>
+   # it's andromeda.mokapot.decoy.psms.txt
+   python3 -u -m picked_group_fdr.pipeline.update_evidence_from_pout --mq_evidence </path/to/mq_evidence_txt> --perc_results percolator/andromeda.mokapot.psms.txt percolator/andromeda.mokapot.decoy.psms.txt --mq_evidence_out percolator/evidence.txt
    ```
     Alternatively, you can use [Prosit](https://www.proteomicsdb.org/prosit/)'s Percolator results files directly:
    ```shell
@@ -30,7 +36,7 @@ python gui.py
    ```
 4. to obtain protein group level FDRs, run:
    ```shell
-   python -m picked_group_fdr --mq_evidence percolator/evidence.txt --fasta </path/to/fasta_file>
+   python -m picked_group_fdr --mq_evidence percolator/evidence.txt --fasta </path/to/fasta_file> -e trypsinp --protein_groups_out ProteinGroups.txt --do_quant
    ```
 
 
