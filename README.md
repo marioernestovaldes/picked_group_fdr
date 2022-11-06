@@ -1,10 +1,14 @@
 # Picked Protein Group FDR
 
+[![PyPI version](https://img.shields.io/pypi/v/picked_group_fdr.svg?logo=pypi&logoColor=FFE873)](https://pypi.org/project/picked_group_fdr/)
+[![Supported Python versions](https://img.shields.io/pypi/pyversions/picked_group_fdr.svg?logo=python&logoColor=FFE873)](https://pypi.org/project/picked_group_fdr/)
+[![PyPI downloads](https://img.shields.io/pypi/dm/picked_group_fdr.svg)](https://pypistats.org/packages/picked_group_fdr)
+
 Scalable, accurate and sensitive protein group FDRs for large-scale mass spectrometry experiments
 
 ## Running Picked Protein Group FDR using the GUI
 
-On Windows, you can download the `PickedGroupFDR_GUI_windows.zip` from the latest release, unzip it and open `PickedGroupFDR.exe` to start the GUI (no installation necessary).
+On Windows, you can download the `PickedGroupFDR_GUI_windows.zip` from the [latest release](https://github.com/kusterlab/picked_group_fdr/releases), unzip it and open `PickedGroupFDR.exe` to start the GUI (no installation necessary).
 
 Make sure that you have run the MaxQuant search with 100% protein-level FDR.
 

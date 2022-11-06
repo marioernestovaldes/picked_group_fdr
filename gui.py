@@ -13,33 +13,44 @@ import time
 import datetime
 import multiprocessing
 
-import picked_group_fdr.pipeline.andromeda2pin as andromeda2pin
-import picked_group_fdr.pipeline.update_evidence_from_pout as update_evidence
-import picked_group_fdr.picked_group_fdr as picked_group_fdr
-import picked_group_fdr.digest as digest
-import picked_group_fdr.utils.multiprocessing_pool as pool
-
 import mokapot
 import numpy as np
 from joblib import parallel_backend
 
+import picked_group_fdr.pipeline.andromeda2pin as andromeda2pin
+import picked_group_fdr.pipeline.update_evidence_from_pout as update_evidence
+import picked_group_fdr.pipeline.merge_pout as merge_pout
+import picked_group_fdr.picked_group_fdr as picked_group_fdr
+import picked_group_fdr.utils.multiprocessing_pool as pool
+import picked_group_fdr.digest as digest
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 
-def run_picked_group_fdr_all(evidence_files, fasta_file, output_dir, digest_params):
+def run_picked_group_fdr_all(evidence_files, pout_files, fasta_file, output_dir, digest_params, input_type):
     try:
+        if len(output_dir) == 0:
+            raise RuntimeError("Please specify an output folder")
         if not os.path.isdir(output_dir):
             os.makedirs(output_dir)
-        run_andromeda_to_pin(evidence_files, fasta_file, output_dir, digest_params)
-        run_mokapot(output_dir)
-        run_update_evidence(evidence_files, output_dir)
-        run_picked_group_fdr(fasta_file, output_dir, digest_params)
+        
+        if input_type == "rescoring":
+            run_update_evidence_rescoring(evidence_files, pout_files, output_dir)
+            run_picked_group_fdr(output_dir, fasta_file, digest_params)
+        elif input_type == "percolator":
+            run_merge_pout(pout_files, fasta_file, output_dir, digest_params)
+            run_picked_group_fdr_percolator_input(output_dir, fasta_file)
+        else:
+            run_andromeda_to_pin(evidence_files, fasta_file, output_dir, digest_params)
+            run_mokapot(output_dir)
+            run_update_evidence(evidence_files, output_dir)
+            run_picked_group_fdr(output_dir, fasta_file, digest_params)
+        
     except SystemExit as e:
-        logger.info(f"Error while running Picked Group FDR, exited with error code {e}.")
+        logger.error(f"Error while running Picked Group FDR, exited with error code: {e}.")
     except Exception as e:
-        logger.info(f"Error while running Picked Group FDR: {e}")
+        logger.error(f"Error while running Picked Group FDR: {e}")
 
 
 def run_andromeda_to_pin(evidence_files, fasta_file, output_dir, digest_params):
@@ -61,13 +72,36 @@ def run_update_evidence(evidence_files, output_dir):
          '--mq_evidence_out', f'{output_dir}/evidence_percolator.txt'])
 
 
-def run_picked_group_fdr(fasta_file, output_dir, digest_params):
+def run_update_evidence_rescoring(evidence_files, pout_files, output_dir):
+    update_evidence.main(
+        ['--mq_evidence'] + evidence_files + 
+        ['--perc_results'] + pout_files +
+        ['--mq_evidence_out', f'{output_dir}/evidence_percolator.txt',
+         '--pout_input_type', 'prosit'])
+
+
+def run_picked_group_fdr(output_dir, fasta_file, digest_params):
     picked_group_fdr.main(
-        ['--mq_evidence', f'{output_dir}/evidence_percolator.txt', 
-         '--methods',  'picked_protein_group_mq_input', 
-         '--protein_groups_out', f'{output_dir}/proteinGroups_percolator.txt', 
-         '--do_quant', 
+        ['--mq_evidence', f'{output_dir}/evidence_percolator.txt',
+         '--methods', 'picked_protein_group_mq_input', 
+         '--do_quant',
+         '--protein_groups_out', f'{output_dir}/proteinGroups_percolator.txt',
          '--fasta', fasta_file] + digest_params)
+
+
+def run_merge_pout(pout_files, fasta_file, output_dir, digest_params):
+    merge_pout.main(
+        ['--perc_results'] + pout_files +
+        ['--perc_merged', f'{output_dir}/pout_merged.txt', 
+         '--fasta', fasta_file] + digest_params)
+
+
+def run_picked_group_fdr_percolator_input(output_dir, fasta_file):
+    picked_group_fdr.main(
+        ['--perc_evidence', f'{output_dir}/pout_merged.txt',
+         '--methods', 'picked_protein_group_no_remap', 
+         '--protein_groups_out', f'{output_dir}/proteinGroups_percolator.txt',
+         '--fasta', fasta_file])
 
 
 # https://stackoverflow.com/questions/28655198/best-way-to-display-logs-in-pyqt#60528393
@@ -108,114 +142,114 @@ class LogHandler(logging.Handler):
         self.emitter.sigLog.emit(msg)
 
 
-class MainWindow(QtWidgets.QWidget):
+class FileSelect(QtWidgets.QWidget):
+    def __init__(self, file_type, file_extensions, file_hint='', folder_select=False, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.file_type = file_type
+        self.file_hint = file_hint
+        self.file_extensions = file_extensions
+        
+        self.label_text = f"Select {self.file_type} file"
+        if folder_select:
+            self.label_text = f"Select {self.file_type} folder"
+        
+        self.file_hint_text = ""
+        if len(file_hint) > 0:
+            self.file_hint_text = f'<br><font color="grey">{self.file_hint}</font>'
+        self.label = QtWidgets.QLabel(self.label_text + self.file_hint_text)
+        
+        self.hbox_layout = QtWidgets.QHBoxLayout()
+        self.hbox_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.line_edit = QtWidgets.QLineEdit()
+        self.browse_button = QtWidgets.QPushButton("Browse")
+        if folder_select:
+            self.browse_button.clicked.connect(self.select_dir)
+        else:
+            self.browse_button.clicked.connect(self.select_file)
+        self.hbox_layout.addWidget(self.line_edit, stretch = 1)
+        self.hbox_layout.addWidget(self.browse_button)
+        
+        self.setLayout(self.hbox_layout)
+    
+    def select_file(self):
+        filename, _ = QtWidgets.QFileDialog.getOpenFileName(self, self.label_text, '', self.file_extensions)
+        self.line_edit.setText(filename)
+    
+    def select_dir(self):
+        output_dir = QtWidgets.QFileDialog.getExistingDirectory(self, self.label_text , '', QtWidgets.QFileDialog.ShowDirsOnly)
+        self.line_edit.setText(output_dir)
+    
+    def get_file(self):
+        return self.line_edit.text()
+    
+    def setButtonsEnabled(self, enable):
+        self.browse_button.setEnabled(enable)
+        
 
+class MultiFileSelect(QtWidgets.QWidget):
+    def __init__(self, file_type, file_extensions, file_hint='', *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.file_type = file_type
+        self.file_hint = file_hint
+        self.file_extensions = file_extensions
+        
+        self.label_text = f"Select {self.file_type} file(s)"
+        
+        self.file_hint_text = ""
+        if len(file_hint) > 0:
+            self.file_hint_text = f'<br><font color="grey">{self.file_hint}</font>'
+        self.label = QtWidgets.QLabel(self.label_text + self.file_hint_text)
+        
+        self.hbox_layout = QtWidgets.QHBoxLayout()
+        self.hbox_layout.setContentsMargins(0, 0, 0, 0)
+        self.setLayout(self.hbox_layout)
+        
+        self.line_edit = QtWidgets.QListWidget()
+        self.line_edit.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
+        
+        self.vbox_layout = QtWidgets.QVBoxLayout()
+        self.vbox_layout.setContentsMargins(0, 0, 0, 0)
+        self.vbox_layout.setAlignment(Qt.AlignTop)
+        
+        self.browse_button = QtWidgets.QPushButton("Add")
+        self.browse_button.clicked.connect(self.add_files)
+        
+        self.remove_button = QtWidgets.QPushButton("Remove")
+        self.remove_button.clicked.connect(self.remove_files)
+        
+        self.vbox_layout.addWidget(self.browse_button)
+        self.vbox_layout.addWidget(self.remove_button)
+        
+        self.hbox_layout.addWidget(self.line_edit, stretch = 1)
+        self.hbox_layout.addLayout(self.vbox_layout)
+    
+    def add_files(self):
+        filenames, _ = QtWidgets.QFileDialog.getOpenFileNames(self, self.label_text, '', self.file_extensions)
+        self.line_edit.addItems(filenames)
+    
+    def remove_files(self):
+        selected_items = self.line_edit.selectedItems()
+        if not selected_items:
+            return
+        
+        for item in selected_items:
+            self.line_edit.takeItem(self.line_edit.row(item))
+    
+    def get_files(self):
+        return [str(self.line_edit.item(i).text()) for i in range(self.line_edit.count())]
+    
+    def setButtonsEnabled(self, enable):
+        self.browse_button.setEnabled(enable)
+        self.remove_button.setEnabled(enable)
+        
+
+class DigestionParametersGroup(QtWidgets.QGroupBox):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         
-        layout = QtWidgets.QFormLayout()
-        
-        self.setWindowTitle("Picked group FDR")
-        
-        self._add_evidence_field(layout)
-        self._add_fasta_field(layout)
-        self._add_output_dir_field(layout)
-        self._add_digestion_params_field(layout)
-        self._add_run_button(layout)
-        self._add_log_textarea(layout)
-        
-        self.setLayout(layout)
-        
-        # sets up handler that will be used by QueueListener
-        # which will update the LogDialoag
-        handler = LogHandler()
-        handler.emitter.sigLog.connect(self.log_text_area.widget.appendPlainText)
-        
-        self.q = multiprocessing.Queue()
-        self.ql = QueueListener(self.q, handler)
-        self.ql.start()
-
-        self.pool = pool.JobPool(processes=1, warningFilter="default", queue=self.q)
-        
-        self.resize(800, self.height())
-
-    def _add_evidence_field(self, layout):
-        # evidence.txt input
-        self.evidence_label = QtWidgets.QLabel("Select evidence.txt file(s)")
-        #self.evidence_label.setMargin(10)
-        
-        self.evidence_widget = QtWidgets.QWidget()
-        
-        self.evidence_hbox_layout = QtWidgets.QHBoxLayout()
-        self.evidence_hbox_layout.setContentsMargins(0, 0, 0, 0)
-        
-        self.evidence_line_edit = QtWidgets.QListWidget()
-        self.evidence_line_edit.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
-        
-        self.evidence_widget.setLayout(self.evidence_hbox_layout)
-        
-        self.evidence_vbox_layout = QtWidgets.QVBoxLayout()
-        self.evidence_vbox_layout.setContentsMargins(0, 0, 0, 0)
-        self.evidence_vbox_layout.setAlignment(Qt.AlignTop)
-        
-        self.evidence_browse_button = QtWidgets.QPushButton("Add")
-        self.evidence_browse_button.clicked.connect(self.get_evidence_files)
-        
-        self.evidence_remove_button = QtWidgets.QPushButton("Remove")
-        self.evidence_remove_button.clicked.connect(self.remove_evidence_files)
-        
-        self.evidence_vbox_layout.addWidget(self.evidence_browse_button)
-        self.evidence_vbox_layout.addWidget(self.evidence_remove_button)
-        
-        self.evidence_hbox_layout.addWidget(self.evidence_line_edit, stretch = 1)
-        self.evidence_hbox_layout.addLayout(self.evidence_vbox_layout)
-        
-        layout.addRow(self.evidence_label, self.evidence_widget)
-
-    def _add_fasta_field(self, layout):
-        # fasta file input
-        self.fasta_label = QtWidgets.QLabel("Select a fasta file")
-        #self.fasta_label.setMargin(10)
-        
-        self.fasta_widget = QtWidgets.QWidget()
-        
-        self.fasta_hbox_layout = QtWidgets.QHBoxLayout()
-        self.fasta_hbox_layout.setContentsMargins(0, 0, 0, 0)
-        
-        self.fasta_line_edit = QtWidgets.QLineEdit()
-        self.fasta_browse_button = QtWidgets.QPushButton("Browse")
-        self.fasta_browse_button.clicked.connect(self.get_fasta_file)
-        self.fasta_hbox_layout.addWidget(self.fasta_line_edit, stretch = 1)
-        self.fasta_hbox_layout.addWidget(self.fasta_browse_button)
-        
-        self.fasta_widget.setLayout(self.fasta_hbox_layout)
-        
-        layout.addRow(self.fasta_label, self.fasta_widget)
-    
-    def _add_output_dir_field(self, layout):
-        # fasta file input
-        self.output_dir_label = QtWidgets.QLabel("Select output folder")
-        #self.output_dir_label.setMargin(10)
-        
-        self.output_dir_widget = QtWidgets.QWidget()
-        
-        self.output_dir_hbox_layout = QtWidgets.QHBoxLayout()
-        self.output_dir_hbox_layout.setContentsMargins(0, 0, 0, 0)
-        
-        self.output_dir_line_edit = QtWidgets.QLineEdit()
-        self.output_dir_browse_button = QtWidgets.QPushButton("Browse")
-        self.output_dir_browse_button.clicked.connect(self.get_output_dir)
-        self.output_dir_hbox_layout.addWidget(self.output_dir_line_edit, stretch = 1)
-        self.output_dir_hbox_layout.addWidget(self.output_dir_browse_button)
-        
-        self.output_dir_widget.setLayout(self.output_dir_hbox_layout)
-        
-        layout.addRow(self.output_dir_label, self.output_dir_widget)
-
-    def _add_digestion_params_field(self, layout):
-        self.digestion_group = QtWidgets.QGroupBox("Digestion parameters")
-        
         self.digestion_group_layout = QtWidgets.QGridLayout()
+        self.setLayout(self.digestion_group_layout)
         
         self.min_length_label = QtWidgets.QLabel("Min peptide length")
         self.min_length_spinbox = QtWidgets.QSpinBox()
@@ -250,24 +284,99 @@ class MainWindow(QtWidgets.QWidget):
         self.digestion_group_layout.addWidget(self.enzyme_select, 0, 1)
         self.digestion_group_layout.addWidget(self.min_length_label, 0, 2)
         self.digestion_group_layout.addWidget(self.min_length_spinbox, 0, 3)
-        
-        self.digestion_group_layout.addWidget(self.max_length_label, 1, 2)
-        self.digestion_group_layout.addWidget(self.max_length_spinbox, 1, 3)
-        self.digestion_group_layout.addWidget(self.max_cleavages_label, 1, 0)
-        self.digestion_group_layout.addWidget(self.max_cleavages_spinbox, 1, 1)
-        
         self.digestion_group_layout.addWidget(self.digestion_label, 0, 4)
         self.digestion_group_layout.addWidget(self.digestion_select, 0, 5)
+        
+        self.digestion_group_layout.addWidget(self.max_cleavages_label, 1, 0)
+        self.digestion_group_layout.addWidget(self.max_cleavages_spinbox, 1, 1)
+        self.digestion_group_layout.addWidget(self.max_length_label, 1, 2)
+        self.digestion_group_layout.addWidget(self.max_length_spinbox, 1, 3)
         self.digestion_group_layout.addWidget(self.special_aas_label, 1, 4)
         self.digestion_group_layout.addWidget(self.special_aas_line_edit, 1, 5)
         
         for col in range(6):
             self.digestion_group_layout.setColumnStretch(col, 1)
+    
+    def get_params(self):
+        return ["--min-length", str(self.min_length_spinbox.value()),
+                "--max-length", str(self.max_length_spinbox.value()),
+                "--cleavages", str(self.max_cleavages_spinbox.value()),
+                "--enzyme", self.enzyme_select.currentText(),
+                "--digestion", self.digestion_select.currentText(),
+                "--special-aas", self.special_aas_line_edit.text()]
+
+class MainWindow(QtWidgets.QWidget):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         
-        self.digestion_group.setLayout(self.digestion_group_layout)
+        self.setWindowTitle("Picked group FDR")
         
+        self.tabs = QtWidgets.QTabWidget()
+        self._add_mq_input_tab()
+        self._add_percolator_input_tab()
+        self._add_rescoring_input_tab()
+        
+        self.fasta_widget = FileSelect('fasta', 'Fasta file (*.fasta *.fa)')
+        self.output_dir_widget = FileSelect('output', '', folder_select=True)        
+        self.digestion_group = DigestionParametersGroup("Digestion parameters")
+        
+        layout = QtWidgets.QFormLayout()
+        self.setLayout(layout)
+        
+        layout.addRow(self.tabs)
+        layout.addRow(self.fasta_widget.label, self.fasta_widget)
+        layout.addRow(self.output_dir_widget.label, self.output_dir_widget)
         layout.addRow(self.digestion_group)
     
+        self._add_run_button(layout)
+        self._add_log_textarea(layout)
+        
+        # sets up handler that will be used by QueueListener
+        # which will update the LogDialog
+        handler = LogHandler()
+        handler.setLevel(logging.INFO) # TODO: this doesn't work, debug messages still make it through
+        handler.emitter.sigLog.connect(self.log_text_area.widget.appendPlainText)
+        
+        self.q = multiprocessing.Queue()
+        self.ql = QueueListener(self.q, handler)
+        self.ql.start()
+
+        self.pool = pool.JobPool(processes=1, warningFilter="default", queue=self.q)
+        
+        self.resize(800, self.height())
+
+    def _add_mq_input_tab(self):
+        self.mq_tab = QtWidgets.QWidget()
+        
+        self.mq_layout = QtWidgets.QFormLayout()
+        self.evidence_widget = MultiFileSelect('evidence.txt', 'Tab separated file (*.txt)')
+        self.mq_layout.addRow(self.evidence_widget.label, self.evidence_widget)
+        
+        self.mq_tab.setLayout(self.mq_layout)
+        self.tabs.addTab(self.mq_tab, "MaxQuant input")
+    
+    def _add_percolator_input_tab(self):
+        self.percolator_tab = QtWidgets.QWidget()
+        
+        self.percolator_layout = QtWidgets.QFormLayout()
+        self.pout_widget = MultiFileSelect('percolator output', '', 'Add both target and decoy results!')
+        self.percolator_layout.addRow(self.pout_widget.label, self.pout_widget)
+        
+        self.percolator_tab.setLayout(self.percolator_layout)
+        self.tabs.addTab(self.percolator_tab, "Percolator input")
+    
+    def _add_rescoring_input_tab(self):
+        self.rescoring_tab = QtWidgets.QWidget()
+        
+        self.rescoring_layout = QtWidgets.QFormLayout()
+        self.evidence_widget_rescoring = MultiFileSelect('evidence.txt', 'Tab separated file (*.txt)')
+        self.pout_widget_rescoring = MultiFileSelect('percolator output', '', 'Add both target and decoy results!')
+        self.rescoring_layout.addRow(self.evidence_widget_rescoring.label, self.evidence_widget_rescoring)
+        self.rescoring_layout.addRow(self.pout_widget_rescoring.label, self.pout_widget_rescoring)
+        
+        self.rescoring_tab.setLayout(self.rescoring_layout)
+        self.tabs.addTab(self.rescoring_tab, "Rescoring input (e.g. Prosit)")
+        
     def _add_run_button(self, layout):    
         self.run_button = QtWidgets.QPushButton("Run")
         self.run_button.clicked.connect(self.run_picked)
@@ -278,6 +387,7 @@ class MainWindow(QtWidgets.QWidget):
     def _add_log_textarea(self, layout):    
         self.log_text_area = QTextEditLogger(self)
         self.log_text_area.setLevel(logging.INFO)
+        self.log_text_area.widget.setMinimumHeight(self.log_text_area.widget.sizeHint().height())
         logger.addHandler(self.log_text_area)
         
         self.log_text_widget = QtWidgets.QWidget()
@@ -304,29 +414,13 @@ class MainWindow(QtWidgets.QWidget):
         self.log_text_widget.setLayout(self.log_text_hbox_layout)
              
         layout.addRow(self.log_text_widget)
-        
-    def get_evidence_files(self):
-        filenames, _ = QtWidgets.QFileDialog.getOpenFileNames(self, 'Open evidence file(s)' , '','Tab separated file (*.txt)' )
-        self.evidence_line_edit.addItems(filenames)
-    
-    def remove_evidence_files(self):
-        selected_items = self.evidence_line_edit.selectedItems()
-        if not selected_items:
-            return
-        
-        for item in selected_items:
-            self.evidence_line_edit.takeItem(self.evidence_line_edit.row(item))
-    
-    def get_fasta_file(self):
-        filename, _ = QtWidgets.QFileDialog.getOpenFileName(self, 'Open fasta file' , '','Fasta file (*.fasta *.fa)' )
-        self.fasta_line_edit.setText(filename)
     
     def get_output_dir(self):
         output_dir = QtWidgets.QFileDialog.getExistingDirectory(self, 'Select output folder' , '', QtWidgets.QFileDialog.ShowDirsOnly)
         self.output_dir_line_edit.setText(output_dir)
     
     def save_log_file(self):
-        filename, _ = QtWidgets.QFileDialog.getSaveFileName(self, 'Save log to file' , 'picked_protein_group_fdr.log', 'Log file (*.txt *.log)' )
+        filename, _ = QtWidgets.QFileDialog.getSaveFileName(self, 'Save log to file', 'picked_protein_group_fdr.log', 'Log file (*.txt *.log)' )
         if not filename:
             return
         
@@ -334,12 +428,15 @@ class MainWindow(QtWidgets.QWidget):
         with open(filename, 'w') as f:
             f.write(self.log_text_area.widget.toPlainText())
         
-        
     def set_buttons_enabled_state(self, enable):
-        self.evidence_browse_button.setEnabled(enable)
-        self.fasta_browse_button.setEnabled(enable)
-        self.output_dir_browse_button.setEnabled(enable)
-        #self.run_button.setEnabled(enable)
+        self.evidence_widget.setButtonsEnabled(enable)
+        self.pout_widget.setButtonsEnabled(enable)
+        self.evidence_widget_rescoring.setButtonsEnabled(enable)
+        self.pout_widget_rescoring.setButtonsEnabled(enable)
+        
+        self.fasta_widget.setButtonsEnabled(enable)
+        self.output_dir_widget.setButtonsEnabled(enable)
+
         # Cannot stop a QThread if it doesn't have an own event loop
         self.run_button.clicked.disconnect()
         if enable:
@@ -350,18 +447,24 @@ class MainWindow(QtWidgets.QWidget):
             self.run_button.clicked.connect(self.stop_picked)
         
     def run_picked(self):
-        evidence_files = [str(self.evidence_line_edit.item(i).text()) for i in range(self.evidence_line_edit.count())]
-        fasta_file = self.fasta_line_edit.text()
-        output_dir = self.output_dir_line_edit.text()
-        digest_params = ["--min-length", str(self.min_length_spinbox.value()),
-                         "--max-length", str(self.max_length_spinbox.value()),
-                         "--cleavages", str(self.max_cleavages_spinbox.value()),
-                         "--enzyme", self.enzyme_select.currentText(),
-                         "--digestion", self.digestion_select.currentText(),
-                         "--special-aas", self.special_aas_line_edit.text()]
+        fasta_file = self.fasta_widget.get_file()
+        output_dir = self.output_dir_widget.get_file()
+        digest_params = self.digestion_group.get_params()
+        
+        evidence_files, pout_files = list(), list()
+        if self.tabs.currentIndex() == 2:
+            input_type = "rescoring"
+            evidence_files = self.evidence_widget_rescoring.get_files()
+            pout_files = self.pout_widget_rescoring.get_files()
+        elif self.tabs.currentIndex() == 1:
+            input_type = "percolator"
+            pout_files = self.pout_widget.get_files()
+        else:
+            input_type = "mq"
+            evidence_files = self.evidence_widget.get_files()
         
         self.set_buttons_enabled_state(False)
-        self.pool.applyAsync(run_picked_group_fdr_all, (evidence_files, fasta_file, output_dir, digest_params), callback=self.on_picked_finished)
+        self.pool.applyAsync(run_picked_group_fdr_all, (evidence_files, pout_files, fasta_file, output_dir, digest_params, input_type), callback=self.on_picked_finished)
     
     def on_picked_finished(self, return_code):
         self.set_buttons_enabled_state(True)
@@ -380,11 +483,14 @@ class MainWindow(QtWidgets.QWidget):
 
 if __name__ == '__main__':
     if sys.platform.startswith('win'):
-        # On Windows calling this function is necessary when combined with pyinstaller: https://stackoverflow.com/questions/24944558/pyinstaller-built-windows-exe-fails-with-multiprocessing
+        # On Windows calling this function is necessary when combined with pyinstaller: 
+        # https://stackoverflow.com/questions/24944558/pyinstaller-built-windows-exe-fails-with-multiprocessing
         multiprocessing.freeze_support()
     else:
-        # On Linux calling this function is necessary when combined with pyqt: https://stackoverflow.com/questions/29556291/multiprocessing-with-qt-works-in-windows-but-not-linux
+        # On Linux calling this function is necessary when combined with pyqt: 
+        # https://stackoverflow.com/questions/29556291/multiprocessing-with-qt-works-in-windows-but-not-linux
         multiprocessing.set_start_method('spawn', force=True)
+
     app = QtWidgets.QApplication(sys.argv)
     w = MainWindow()
     w.show()
