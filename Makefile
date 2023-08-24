@@ -21,11 +21,17 @@ integration_test:
 	python3 -um picked_group_fdr --mq_evidence ${DATA}/evidence.txt --fasta ${DATA}/db.fasta --enzyme trypsinp --min-length 6 --protein_groups_out ${DATA}/proteinGroups.txt --method picked_protein_group_mq_input
 
 performance:
-	python3 -m pytest -s tests/performance_tests
+	python3 -m pytest -s tests/performance_tests/test_lfq.py
 
+# can be visualized with snakeviz -H 0.0.0.0 -s program.prof
+performance_cprofile:
+	python3 -m cProfile -o program.prof tests/performance_tests/test_lfq.py
+
+# need to run "pip install ." before kernprof to reflect the changes in the package
 line_profiler_lfq:
 	kernprof -lv tests/performance_tests/test_lfq.py
 
+# can be plotted with mprof plot
 memory_profile:
 	mprof run --include-children --backend psutil_pss python3 -u tests/performance_tests/test_lfq.py | ts '[%H:%M:%.S]'
 
@@ -33,6 +39,9 @@ memory_profile:
 build: dependencies
 	docker build -f Dockerfile -t $(IMAGE) . || (exit 1)
 
+bootstrap: DATA=/root/data
+bootstrap:
+	bash -c "cp /root/{config.py,Makefile*} $(LOCAL_DIR)"
 
 ####################################################################################
 ### Pipeline including recalculation of PEPs by mokapot (=percolator for Python) ###
@@ -82,3 +91,16 @@ compress: filter_results_gene_level
 all: compress
 
 
+
+
+# run this step manually if mokapot runs out of memory, tested with percolator 3.05
+percolator_subset_training: 
+	percolator --weights $(OUT_DIR_LOCAL)/percolator/andromeda.weights.txt -Y \
+		--testFDR $(PERC_TEST_FDR) \
+		--trainFDR $(PERC_TRAIN_FDR) \
+		--subset-max-train 10000000 \
+		--results-psms $(OUT_DIR_LOCAL)/percolator/andromeda.mokapot.psms.txt \
+		--decoy-results-psms $(OUT_DIR_LOCAL)/percolator/andromeda.mokapot.decoys.psms.txt \
+		--results-peptides $(OUT_DIR_LOCAL)/percolator/andromeda.mokapot.peptides.txt \
+		--decoy-results-peptides $(OUT_DIR_LOCAL)/percolator/andromeda.mokapot.decoys.peptides.txt \
+		$(OUT_DIR_LOCAL)/percolator/andromeda.tab 2>&1 | tee $(OUT_DIR_LOCAL)/percolator/andromeda.log

@@ -33,7 +33,7 @@ def parseArgs(argv):
     apars = argparse.ArgumentParser(
             formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
-    apars.add_argument('--mq_evidence', default=None, metavar = "EV", required = True,
+    apars.add_argument('--mq_evidence', default=None, metavar = "EV", required = True, nargs="+",
                          help='''MaxQuant evidence file.''')
     
     apars.add_argument('--mq_protein_groups', default=None, metavar = "PG", required = True,
@@ -47,7 +47,7 @@ def parseArgs(argv):
                          help='''TSV file with mapping from peptides to proteins.''')
     
     apars.add_argument('--fasta', default=None, metavar = "F",
-                         help='''Fasta file to create mapping from peptides to proteins.''')
+                         help='''Fasta file to create mapping from peptides to proteins. This should not contain the decoy sequences, unless you set the --fasta_contains_decoys flag.''')
     
     apars.add_argument('--fasta_use_uniprot_id',
                          help='''Parse protein identifiers in the fasta file as UniProt IDs, 
@@ -122,15 +122,19 @@ def getPeptideToProteinMaps(args, parseId):
     if args.fasta:
         pre, not_post = digest.getCleavageSites(args.enzyme)
         
+        db = 'concat'
+        if args.fasta_contains_decoys:
+            db = 'target'
+            
         peptideToProteinMap = digest.getPeptideToProteinMap(
-                args.fasta, db = 'concat', digestion = args.digestion, 
+                args.fasta, db = db, digestion = args.digestion, 
                 min_len = args.min_length, max_len = args.max_length, 
                 pre = pre, not_post = not_post, miscleavages = args.cleavages, 
                 methionineCleavage = True, specialAAs = list(args.special_aas),
                 parseId = parseId, useHashKey = (args.digestion == "none"))
         
         peptideToProteinMapIbaq = digest.getPeptideToProteinMap(
-                args.fasta, db = 'concat', digestion = args.digestion, 
+                args.fasta, db = db, digestion = args.digestion, 
                 min_len = minLenIbaq, max_len = maxLenIbaq, 
                 pre = pre, not_post = not_post, miscleavages = 0,
                 methionineCleavage = False, specialAAs = list(args.special_aas),
@@ -156,7 +160,7 @@ def getPeptideToProteinMaps(args, parseId):
     return peptideToProteinMap, numIbaqPeptidesPerProtein
 
 
-def doQuantification(mqEvidenceFile, proteinGroupResults, proteinSequences,
+def doQuantification(mqEvidenceFiles, proteinGroupResults, proteinSequences,
         peptideToProteinMap, numIbaqPeptidesPerProtein, fileListFile, 
         scoreType, psmQvalCutoff = 0.01, 
         discardSharedPeptides = True, 
@@ -170,8 +174,8 @@ def doQuantification(mqEvidenceFile, proteinGroupResults, proteinSequences,
     if fileListFile:
         experiments, fileMapping, params = parseFileList(fileListFile, params) 
     
-    proteinGroupResults, postErrProbs, numTmtChannels, numSilacChannels, parsedExperiments = parseEvidenceFile(
-            proteinGroupResults, mqEvidenceFile, peptideToProteinMap, 
+    proteinGroupResults, postErrProbs, numTmtChannels, numSilacChannels, parsedExperiments = parseEvidenceFiles(
+            proteinGroupResults, mqEvidenceFiles, peptideToProteinMap, 
             fileMapping, scoreType, discardSharedPeptides)
     
     silacChannels = getSilacChannels(numSilacChannels)
@@ -214,7 +218,7 @@ def doQuantification(mqEvidenceFile, proteinGroupResults, proteinSequences,
         c.append_columns(proteinGroupResults, experimentToIdxMap, postErrProbCutoff)
 
 
-def parseEvidenceFile(proteinGroupResults, mqEvidenceFile, peptideToProteinMap, 
+def parseEvidenceFiles(proteinGroupResults, mqEvidenceFiles, peptideToProteinMap, 
                                             fileMapping, scoreType, discardSharedPeptides):    
     proteinGroups = ProteinGroups.from_protein_group_results(proteinGroupResults)
     proteinGroups.create_index()
@@ -225,7 +229,7 @@ def parseEvidenceFile(proteinGroupResults, mqEvidenceFile, peptideToProteinMap,
     parsedExperiments = set()
     missingPeptidesInFasta, missingPeptidesInProteinGroups = 0, 0
     
-    for peptide, tmp_proteins, charge, rawFile, experiment, fraction, intensity, postErrProb, tmtCols, silacCols, evidenceId in parsers.parseMqEvidenceFile(mqEvidenceFile, scoreType = ProteinScoringStrategy("bestPEP"), forQuantification = True):
+    for peptide, tmp_proteins, charge, rawFile, experiment, fraction, intensity, postErrProb, tmtCols, silacCols, evidenceId in parsers.parseEvidenceFiles(mqEvidenceFiles, scoreType = ProteinScoringStrategy("bestPEP"), forQuantification = True):
         if numTmtChannels == -1:
             # There are 3 columns per TMT channel: 
             #     Reporter intensity corrected, 

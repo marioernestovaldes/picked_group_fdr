@@ -8,7 +8,7 @@ from typing import List, Dict, Tuple, Union
 
 import numpy as np
 
-from . import version
+from . import __version__, __copyright__
 from . import digest
 from . import helpers
 from . import parsers
@@ -32,10 +32,7 @@ from .plotter import Plotter, NoPlotter
 
 logger = logging.getLogger(__name__)
 
-__version__ = version.get_version_from_pyproject()
-__copyright__ = '''Copyright (c) 2020-2022 Matthew The. All rights reserved.
-Written by Matthew The (matthew.the@tum.de) at the
-Chair of Proteomics and Bioanalytics at the Technical University of Munich.'''
+GREETER = f'PickedGroupFDR version {__version__}\n{__copyright__}' 
 
 
 class ArgumentParserWithLogger(argparse.ArgumentParser):
@@ -46,29 +43,30 @@ class ArgumentParserWithLogger(argparse.ArgumentParser):
 
 def parseArgs(argv):
     apars = ArgumentParserWithLogger(
+            description=GREETER,
             formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
-    apars.add_argument('--mq_evidence', default=None, metavar = "EV",
-                         help='''MaxQuant evidence file.''')
+    apars.add_argument('--mq_evidence', default=None, metavar = "EV", nargs="+",
+                         help='''MaxQuant evidence file(s).''')
 
     apars.add_argument('--protein_groups_out', default=None, metavar = "PG",
                          help='''Protein groups output file, mimicks a subset of the MQ protein groups columns.
                                 ''')
 
     apars.add_argument('--fasta', default=None, metavar = "F",
-                         help='''Fasta file to create mapping from peptides to proteins.
-                                                    ''')
-
+                         help='''Fasta file to create mapping from peptides to proteins. This should not contain the decoy sequences, unless you set the --fasta_contains_decoys flag.
+                                 ''')
+                         
     apars.add_argument('--mq_protein_groups', default=None, metavar = "PG",
                          help='''MaxQuant protein groups file; only specify if we want to keep MaxQuant's original grouping instead of Picked Grouping
                                 ''')
 
-    apars.add_argument('--perc_evidence', default=None, metavar = "POUT",
-                         help='''Percolator output file with PSMs or peptides; alternative for --mq_evidence if we want to use Percolator PEPs instead of MaxQuant's PEPs
+    apars.add_argument('--perc_evidence', default=None, metavar = "POUT", nargs="+",
+                         help='''Percolator output file(s) with PSMs or peptides; alternative for --mq_evidence if we want to use Percolator PEPs instead of MaxQuant's PEPs
                                 ''')
 
-    apars.add_argument('--methods', default=None, metavar = "M1,M2",
-                         help='''Use one or more predefined protein group FDR estimation methods, separated by commas.''')
+    apars.add_argument('--methods', default='picked_protein_group', metavar = "M1,M2",
+                         help='''Use one or more protein group FDR estimation methods, separated by commas. Examples of builtin methods: picked_protein_group, picked_protein_group_mq_input, savitski, maxquant. Alternatively, specify one our more paths to toml files with a .toml extension following the same format as the builtin method toml files.''')
 
     apars.add_argument('--peptide_protein_map', default=None, metavar = "M",
                          help='''File with mapping from peptides to proteins; alternative for --fasta flag if digestion is time consuming.
@@ -78,6 +76,10 @@ def parseArgs(argv):
                          help='''File with mapping from peptides to proteotypicity.
                                 ''')
 
+    apars.add_argument('--keep_all_proteins', default=None,
+                         help='''Keep proteins that do not have peptides below the PSM FDR filter.''',
+                         action='store_true')
+    
     apars.add_argument('--gene_level',
                          help='Report gene-level statistics instead of protein group-level. This requires the GN= field to be present in the fasta file.',
                          action='store_true')
@@ -118,7 +120,7 @@ def parseArgs(argv):
 
 
 def main(argv):
-    logger.info(f'PickedGroupFDR version {__version__}\n{__copyright__}')
+    logger.info(GREETER)
     logger.info(f'Issued command: {os.path.basename(__file__)} {" ".join(map(str, argv))}')
     
     args = parseArgs(argv)
@@ -150,9 +152,9 @@ def main(argv):
         label = config.get('label', "")
         logger.info(f"Protein group level estimation method: {label} ({methodDescriptionLong})")
         
-        peptideFile = config['scoreType'].get_evidence_file(args)
-        if not peptideFile:
-            logger.warning("No evidence file provided, skipping...")
+        evidenceFiles = config['scoreType'].get_evidence_file(args)
+        if not evidenceFiles:
+            logger.warning(f"No evidence input file found, skipping method \"{label}\". Check if an appropriate method was specified by the --methods flag.")
             continue
         
         if len(peptideToProteinMap) == 0 and (config['grouping'].needs_peptide_to_protein_map() or config['scoreType'].remaps_peptides_to_proteins()):
@@ -162,17 +164,17 @@ def main(argv):
         if len(peptideToProteotypicityMap) == 0 and config['scoreType'].use_proteotypicity:
             peptideToProteotypicityMap = proteotypicity.getPeptideToProteotypicityFromFile(args.peptide_proteotypicity_map)
         
-        peptideInfoList = parseMqEvidenceFile(peptideFile, 
-                                              peptideToProteinMap, 
-                                              config['scoreType'], 
-                                              args.suppress_missing_peptide_warning)
+        peptideInfoList = parseEvidenceFiles(evidenceFiles, 
+                                             peptideToProteinMap, 
+                                             config['scoreType'], 
+                                             args.suppress_missing_peptide_warning)
         
         plotter.set_series_label_base(config.get('label', None))
         proteinGroupResults = getProteinGroupResults(
                 peptideInfoList, args.mq_protein_groups, 
                 proteinAnnotations, peptideToProteotypicityMap,
                 config['pickedStrategy'], config['scoreType'], config['grouping'], 
-                plotter)
+                plotter, args.keep_all_proteins)
         
         if args.do_quant:
             doQuantification(config, args, proteinGroupResults, parseId, peptideToProteinMap)
@@ -196,7 +198,8 @@ def getProteinGroupResults(
         pickedStrategy: ProteinCompetitionStrategy,
         scoreType: ProteinScoringStrategy,
         groupingStrategy: ProteinGroupingStrategy, 
-        plotter: Union[Plotter, NoPlotter]):
+        plotter: Union[Plotter, NoPlotter],
+        keep_all_proteins: bool):
     proteinGroups = groupingStrategy.group_proteins(peptideInfoList, mqProteinGroupsFile)
     
     # for razor peptide strategy
@@ -226,7 +229,8 @@ def getProteinGroupResults(
         proteinGroupResults = ProteinGroupResults.from_protein_groups(
                 pickedProteinGroups, pickedProteinGroupPeptideInfos, 
                 proteinScores, reportedQvals, 
-                scoreCutoff, proteinAnnotations)
+                scoreCutoff, proteinAnnotations,
+                keep_all_proteins)
 
     if scoreType.use_proteotypicity:
         proteotypicity.calculateProteotypicityScores(pickedProteinGroups, pickedProteinGroupPeptideInfos, peptideToProteotypicityMap, scoreType, scoreCutoff)
@@ -237,10 +241,10 @@ def getProteinGroupResults(
     return proteinGroupResults
 
 
-def parseMqEvidenceFile(mqEvidenceFile: str, peptideToProteinMap, scoreType, suppressMissingPeptideWarning: bool) -> PeptideInfoList:
+def parseEvidenceFiles(evidenceFiles: List[str], peptideToProteinMap, scoreType, suppressMissingPeptideWarning: bool) -> PeptideInfoList:
     """Returns best score per peptide"""
     peptideInfoList = dict()
-    for peptide, tmp_proteins, _, score in parsers.parseMqEvidenceFile(mqEvidenceFile, scoreType = scoreType):
+    for peptide, tmp_proteins, _, score in parsers.parseEvidenceFiles(evidenceFiles, scoreType = scoreType):
         peptide = helpers.cleanPeptide(peptide)
         if np.isnan(score) or score >= peptideInfoList.get(peptide, [np.inf])[0]:
             continue

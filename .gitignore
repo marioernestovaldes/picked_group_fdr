@@ -132,3 +132,7 @@ system*
 data*
 results*
 UPX
+flamegraph.svg
+*prof
+
+*.swp

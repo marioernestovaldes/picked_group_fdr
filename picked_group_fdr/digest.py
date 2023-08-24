@@ -1,4 +1,5 @@
 from __future__ import print_function
+import os
 
 import sys
 import csv
@@ -148,6 +149,10 @@ def addArguments(apars):
                                          help='''Digestion mode ('full', 'semi' or 'none').
                                                     ''')
 
+    apars.add_argument('--fasta_contains_decoys',
+                         help='Set this flag if your fasta file already contains decoy protein sequences.',
+                         action='store_true')
+
 
 def writeProteinToGeneMap(fastaFile, outputFile):
     writer = csv.writer(open(outputFile, 'w'), delimiter = '\t')
@@ -173,8 +178,10 @@ def parseUniProtId(fastaId):
         return proteinId
 
 
-def readFastaProteins(filePath, db = "concat", parseId = parseUntilFirstSpace, parseProteinName = parseProteinNameFunc, parseGeneName = parseGeneNameFunc):
-    name, seq = None, []
+def readFastaProteins(filePath: str, db = "concat", parseId = parseUntilFirstSpace, parseProteinName = parseProteinNameFunc, parseGeneName = parseGeneNameFunc):
+    if not os.path.isfile(filePath):
+        raise FileNotFoundError(f"Could not find fasta file {filePath}. Please make sure you provided a valid fasta file.")
+    
     with open(filePath, 'r') as fp:
         for line in itertools.chain(fp, [">"]):
             line = line.rstrip()
@@ -282,6 +289,8 @@ def filterFastaFile(fastaFile, filteredFastaFile, proteins):
 
 def getPeptides(fastaFile, db = "concat", min_len = 6, max_len = 50, pre = ['K', 'R'], not_post = ['P'], digestion = 'full', miscleavages = 0, methionineCleavage = True):
     for protein, seq in readFasta(fastaFile, db):
+        if len(seq) == 0:
+            raise ValueError(f"Found an empty sequence for protein id {protein}, please check your fasta file.")
         for peptide in getDigestedPeptides(seq, min_len, max_len, pre, not_post, digestion, miscleavages, methionineCleavage):
             yield peptide
 
@@ -356,8 +365,12 @@ def get_peptide_to_protein_map(args, parseId):
         if args.enzyme == "no_enzyme":
             args.digestion = "none"
         
+        db = 'concat'
+        if args.fasta_contains_decoys:
+            db = 'target'
+
         peptideToProteinMap = getPeptideToProteinMap(
-                args.fasta, db = 'concat', digestion = args.digestion, 
+                args.fasta, db = db, digestion = args.digestion, 
                 min_len = args.min_length, max_len = args.max_length, 
                 pre = pre, not_post = not_post, 
                 miscleavages = args.cleavages, methionineCleavage = True, 
